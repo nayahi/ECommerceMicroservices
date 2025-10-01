@@ -15,6 +15,8 @@ using UserService.Models;
 using UserService.Services;
 using UserService.Services.Data;
 using BC = BCrypt.Net.BCrypt;
+using MassTransit;
+using ECommerce.Common.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -77,6 +79,33 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin()
               .AllowAnyMethod()
               .AllowAnyHeader();
+    });
+});
+
+builder.Services.AddMassTransit(x =>
+{
+    // Registrar el consumer
+    x.AddConsumer<ProductCreatedConsumer>();
+    x.AddConsumer<TestMessageConsumer>();
+
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host("localhost", "/", h =>
+        {
+            h.Username("admin");
+            h.Password("admin123");
+        });
+
+        // Configurar el consumer
+        cfg.ReceiveEndpoint("user-service-queue", e =>
+        {
+            e.ConfigureConsumer<ProductCreatedConsumer>(context);
+        });
+
+        cfg.ReceiveEndpoint("test-queue", e =>
+        {
+            e.ConfigureConsumer<TestMessageConsumer>(context);
+        });
     });
 });
 
@@ -370,6 +399,42 @@ app.MapGet("/api/users/{id:int}/discount", async (
 .Produces(404)
 .WithOpenApi();
 
+/*
+app.MapPost("/api/users", async (
+    CreateUserDto dto,
+    IUserService userService,
+    IPublishEndpoint publishEndpoint) =>
+{
+    try
+    {
+        var user = await userService.CreateUserAsync(dto);
+
+        // Publicar evento
+        var userEvent = new UserCreatedEvent
+        {
+            UserId = user.Id,
+            Email = user.Email,
+            RandomNumber = Random.Shared.Next(1, 100)
+        };
+
+        await publishEndpoint.Publish(userEvent);
+        Log.Information("📤 Evento UserCreated publicado con número: {Number}",
+            userEvent.RandomNumber);
+
+        return Results.Created($"/api/users/{user.Id}",
+            ApiResponse<UserDto>.Ok(user, "Usuario creado y evento publicado"));
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Error creando usuario");
+        return Results.Problem("Error al crear el usuario");
+    }
+})
+.WithName("CreateUser")
+.WithOpenApi();
+*/
+
+///Endpoints definition end
 // Health check endpoint
 app.MapHealthChecks("/health");
 
@@ -398,3 +463,46 @@ app.Run();
 
 // Hacer la clase Program testeable
 public partial class Program { }
+
+public class ProductCreatedConsumer : IConsumer<ProductCreatedEvent>
+{
+    private readonly ILogger<ProductCreatedConsumer> _logger;
+
+    public ProductCreatedConsumer(ILogger<ProductCreatedConsumer> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task Consume(ConsumeContext<ProductCreatedEvent> context)
+    {
+        var message = context.Message;
+
+        _logger.LogInformation("📨 EVENTO RECIBIDO EN USER SERVICE:");
+        _logger.LogInformation("   ProductId: {ProductId}", message.ProductId);
+        _logger.LogInformation("   ProductName: {ProductName}", message.ProductName);
+        _logger.LogInformation("   Price: ${Price}", message.Price);
+        _logger.LogInformation("   Message: {Message}", message.Message);
+        _logger.LogInformation("   CreatedAt: {CreatedAt}", message.CreatedAt);
+
+        // Simular procesamiento
+        await Task.Delay(1000);
+
+        // Aquí podrías:
+        // - Enviar email a usuarios premium sobre nuevo producto
+        // - Actualizar estadísticas
+        // - Guardar en cache
+        // - etc.
+
+        _logger.LogInformation("✅ Evento ProductCreated procesado exitosamente");
+    }
+}
+
+public class TestMessageConsumer : IConsumer<TestMessageEvent>
+{
+    public async Task Consume(ConsumeContext<TestMessageEvent> context)
+    {
+        Console.WriteLine($"📨 Mensaje recibido: {context.Message.Message}");
+        Console.WriteLine($"   Número: {context.Message.RandomNumber}");
+        await Task.CompletedTask;
+    }
+}
