@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using ECommerce.Common.Extensions;
 using ECommerce.Common.DTOs;
 using ECommerce.Common.Events;
@@ -10,6 +10,9 @@ using OrderService.Data;
 using OrderService.DTOs;
 using OrderService.Services;
 using OrderService.Consumers;
+using MassTransit;
+using ECommerce.Common.Events;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,7 +30,7 @@ builder.Services.AddSwaggerGen(c =>
 builder.Services.AddDbContext<OrderDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Configurar HttpClients para comunicaci�n con otros servicios
+// Configurar HttpClients para comunicación con otros servicios
 var serviceUrls = builder.Configuration.GetSection("ServiceUrls").Get<ServiceUrls>() ?? new ServiceUrls();
 builder.Services.AddSingleton(serviceUrls);
 
@@ -73,6 +76,34 @@ builder.Services.AddCors(options =>
     });
 });
 
+// Configurar HttpClient para comunicación síncrona
+builder.Services.AddHttpClient("UserService", client =>
+{
+    client.BaseAddress = new Uri("http://localhost:5002/"); // Puerto de UserService
+client.Timeout = TimeSpan.FromSeconds(30);
+});
+
+
+// Configurar RabbitMQ
+builder.Services.AddMassTransit(x =>
+{
+    x.AddConsumer<UserCreatedConsumer>();
+
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host("localhost", "/", h =>
+        {
+            h.Username("admin");
+            h.Password("admin123");
+        });
+
+        cfg.ReceiveEndpoint("order-service-queue", e =>
+        {
+            e.ConfigureConsumer<UserCreatedConsumer>(context);
+        });
+    });
+});
+
 var app = builder.Build();
 
 // Middleware pipeline
@@ -85,7 +116,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// Aplicar migraciones autom�ticamente
+// Aplicar migraciones automáticamente
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
@@ -227,7 +258,7 @@ app.MapPost("/api/orders/{id:int}/cancel", async (
         if (order == null)
             return Results.NotFound(ApiResponse<OrderDto>.Fail($"Pedico con ID {id} no se encontro"));
 
-        // Publicar evento de cancelaci�n
+        // Publicar evento de cancelación
         await publishEndpoint.Publish(new OrderCancelledEvent
         {
             OrderId = id,
@@ -247,7 +278,189 @@ app.MapPost("/api/orders/{id:int}/cancel", async (
 .Produces(404)
 .WithOpenApi();
 
+///////////////////////////
+///
+// ENDPOINT: Crear orden simple (HTTP + Evento)
+app.MapPost("/api/orders/simple", async Task<IResult> (
+    SimpleCreateOrderDto dto,
+    IHttpClientFactory httpClientFactory,
+    IPublishEndpoint publishEndpoint) =>
+{
+    try
+    {
+        Log.Information("📦 Creando orden para usuario {UserId}", dto.UserId);
+
+        // PASO 1: Validar usuario via HTTP
+        var httpClient = httpClientFactory.CreateClient("UserService");
+
+        try
+        {
+            var response = await httpClient.GetAsync($"api/users/{dto.UserId}");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Log.Warning("❌ Usuario {UserId} no encontrado", dto.UserId);
+                return Results.BadRequest(new
+                {
+                    success = false,
+                    message = $"Usuario {dto.UserId} no existe"
+                });
+            }
+
+            var userJson = await response.Content.ReadAsStringAsync();
+            Log.Information("✅ Usuario validado via HTTP");
+        }
+        catch (HttpRequestException ex)
+        {
+            Log.Error(ex, "⚠️ UserService no disponible");
+
+            // OPCIÓN 1: Usar StatusCode genérico para 503
+            return Results.Problem(
+                detail: "UserService no disponible temporalmente",
+                statusCode: 503,
+                title: "Service Unavailable"
+            );
+
+            // OPCIÓN 2: Usar Json con StatusCode específico
+            // return Results.Json(
+            //     new { success = false, message = "UserService no disponible temporalmente" },
+            //     statusCode: 503
+            // );
+        }
+
+        // PASO 2: Crear la orden
+        var orderId = Random.Shared.Next(1000, 9999);
+        var order = new
+        {
+            Id = orderId,
+            UserId = dto.UserId,
+            TotalAmount = dto.TotalAmount,
+            Status = "Created",
+            CreatedAt = DateTime.UtcNow
+        };
+
+        // PASO 3: Publicar evento
+        var orderEvent = new SimpleOrderCreatedEvent
+        {
+            OrderId = orderId,
+            UserId = dto.UserId,
+            TotalAmount = dto.TotalAmount
+        };
+
+        await publishEndpoint.Publish(orderEvent);
+        Log.Information("📤 Evento SimpleOrderCreated publicado");
+
+        return Results.Created($"/api/orders/{orderId}", new
+        {
+            success = true,
+            message = "Orden creada exitosamente",
+            data = order,
+            eventPublished = true
+        });
+    }
+    catch (Exception ex)
+    {
+        Log.Error(ex, "Error creando orden");
+        return Results.Problem("Error al crear la orden");
+    }
+})
+.WithName("CreateSimpleOrder")
+.WithOpenApi()
+.Produces<object>(201)
+.Produces<object>(400)
+.ProducesProblem(503)
+.ProducesProblem(500);
+
+
+// ENDPOINT: Probar comunicación HTTP
+app.MapGet("/api/test/check-user/{userId}", async (
+    int userId,
+    IHttpClientFactory httpClientFactory) =>
+{
+    var httpClient = httpClientFactory.CreateClient("UserService");
+
+    try
+    {
+        var response = await httpClient.GetAsync($"api/users/{userId}");
+
+        if (response.IsSuccessStatusCode)
+        {
+            var content = await response.Content.ReadAsStringAsync();
+            return Results.Ok(new
+            {
+                success = true,
+                message = "Usuario encontrado via HTTP",
+                statusCode = (int)response.StatusCode,
+                data = JsonSerializer.Deserialize<object>(content)
+            });
+        }
+
+        return Results.NotFound(new
+        {
+            success = false,
+            message = "Usuario no encontrado",
+            statusCode = (int)response.StatusCode
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Error comunicándose con UserService: {ex.Message}");
+    }
+})
+.WithName("TestHttpCommunication")
+.WithOpenApi();
+
+///
+///////////////////////////
+
+///////////////ENDPoints End
+
 // Health check endpoint
 app.MapHealthChecks("/health");
 
 app.Run();
+
+// Hacer la clase Program testeable
+public partial class Program { }
+
+// Consumer para eventos de usuario
+public class UserCreatedConsumer : IConsumer<UserCreatedEvent>
+{
+    private readonly ILogger<UserCreatedConsumer> _logger;
+
+    public UserCreatedConsumer(ILogger<UserCreatedConsumer> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task Consume(ConsumeContext<UserCreatedEvent> context)
+    {
+        var message = context.Message;
+
+        _logger.LogInformation("🎲 ORDER SERVICE recibió UserCreated:");
+        _logger.LogInformation("   UserId: {UserId}", message.UserId);
+        _logger.LogInformation("   Email: {Email}", message.Email);
+        _logger.LogInformation("   Número aleatorio: {Number}", message.RandomNumber);
+
+        // Simular que si el número es par, damos descuento
+        if (message.RandomNumber % 2 == 0)
+        {
+            _logger.LogInformation("🎉 El usuario {Email} ganó 10% de descuento!",
+                message.Email);
+        }
+
+        await Task.CompletedTask;
+    }
+}
+
+public static class ResultsExtensions
+{
+    public static IResult ServiceUnavailable(object? value = null)
+    {
+        return Results.Json(
+            value ?? new { message = "Service temporarily unavailable" },
+            statusCode: StatusCodes.Status503ServiceUnavailable
+        );
+    }
+}
+

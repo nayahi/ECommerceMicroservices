@@ -59,4 +59,39 @@ namespace ECommerce.Common.Events
         public int OrderId { get; set; }
         public string Reason { get; set; }
     }
+
+    // Evento simple para demostrar el concepto
+    public class ProductCreatedEvent : BaseEvent
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public string Message { get; set; } = "Hola desde CatalogService!";
+    }
+
+    public class UserCreatedEvent : BaseEvent
+    {
+        public int UserId { get; set; }
+        public string Email { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public int RandomNumber { get; set; } = Random.Shared.Next(1, 100);
+    }
+
+    public class SimpleOrderCreatedEvent : BaseEvent
+    {
+        public int OrderId { get; set; }
+        public int UserId { get; set; }
+        public decimal TotalAmount { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public string Status { get; set; } = "Pending";
+    }
+
+    // Evento simple para pruebas
+    public class TestMessageEvent
+    {
+        public string Message { get; set; } = "Hola Mundo";
+        public int RandomNumber { get; set; } = Random.Shared.Next(1, 100);
+        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    }
 }

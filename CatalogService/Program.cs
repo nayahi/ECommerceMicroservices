@@ -3,13 +3,15 @@ using CatalogService.DTOs;
 using CatalogService.Models;
 using CatalogService.Services;
 using ECommerce.Common.DTOs;
+using ECommerce.Common.Events;
+using ECommerce.Common.Extensions;
 using FluentValidation;
+using MassTransit;
 using MassTransit.Futures.Contracts;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using Serilog;
 using static MassTransit.ValidationResultExtensions;
-using ECommerce.Common.Extensions;
 
 // Configurar Serilog
 Log.Logger = new LoggerConfiguration()
@@ -68,6 +70,22 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin()
               .AllowAnyMethod()
               .AllowAnyHeader();
+    });
+});
+
+// NUEVO: Configurar RabbitMQ con MassTransit
+builder.Services.AddMassTransit(x =>
+{
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host("localhost", "/", h =>
+        {
+            h.Username("admin");
+            h.Password("admin123");
+        });
+
+        // Configuración simple sin consumers
+        cfg.ConfigureEndpoints(context);
     });
 });
 
@@ -156,7 +174,8 @@ app.MapGet("/api/products/{id:int}", async (int id, IProductService catalogServi
 app.MapPost("/api/products", async (
     CreateProductDto dto,
     IProductService catalogService,
-    IValidator<CreateProductDto> validator) =>
+    IValidator<CreateProductDto> validator, 
+    IPublishEndpoint publishEndpoint) =>
 {
     var validationResult = await validator.ValidateAsync(dto);
     if (!validationResult.IsValid)
@@ -169,8 +188,21 @@ app.MapPost("/api/products", async (
     try
     {
         var product = await catalogService.CreateProductAsync(dto);
+
+        // NUEVO: Publicar evento a RabbitMQ
+        var productEvent = new ProductCreatedEvent
+        {
+            ProductId = product.Id,
+            ProductName = product.Name,
+            Price = product.Price,
+            Message = $"Producto '{product.Name}' creado exitosamente!"
+        };
+
+        await publishEndpoint.Publish(productEvent);
+        Log.Information("✅ Evento ProductCreated publicado a RabbitMQ");
+
         return Results.Created($"/api/products/{product.Id}",
-            ApiResponse<ProductDto>.Ok(product, "Producto creado ok"));
+            ApiResponse<ProductDto>.Ok(product, "Producto creado y evento publicado"));
     }
     catch (Exception ex)
     {
@@ -282,6 +314,45 @@ app.MapGet("/api/products/{id:int}/stock", async (int id, IProductService catalo
 .Produces<ApiResponse<int>>(200)
 .Produces(404)
 .WithOpenApi();
+
+// NUEVO: Endpoint de prueba para publicar mensaje simple
+app.MapPost("/api/test/publish-message", async (
+    IPublishEndpoint publishEndpoint,
+    string? message = null) =>
+{
+    var testMessage = message ?? "Hola Mundo desde CatalogService!";
+
+    var testEvent = new ProductCreatedEvent
+    {
+        ProductId = 999,
+        ProductName = "Producto de Prueba",
+        Price = 123.45m,
+        Message = testMessage
+    };
+
+    await publishEndpoint.Publish(testEvent);
+
+    Log.Information("📤 Mensaje de prueba publicado: {Message}", testMessage);
+
+    return Results.Ok(new
+    {
+        success = true,
+        message = "Mensaje publicado a RabbitMQ",
+        eventData = testEvent
+    });
+})
+.WithName("TestPublishMessage")
+.WithOpenApi();
+
+// Endpoint de prueba
+app.MapPost("/api/test/send", async (IPublishEndpoint publisher) =>
+{
+    await publisher.Publish(new TestMessageEvent
+    {
+        Message = "Hola desde CatalogService!"
+    });
+    return Results.Ok("Mensaje enviado");
+});
 
 /*
 // GET /api/products - Obtener todos los productos
@@ -434,7 +505,8 @@ app.MapGet("/", () => new
         "get /api/products/search",
         //"GET /api/products/search?term={term}",
         "GET /api/products/{id:int}/stock",
-        "GET /health"
+        "GET /health",
+        "POST /api/test/publish-message"
     },
     Documentation = "/swagger"
 });

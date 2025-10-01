@@ -38,4 +38,6 @@
     {
         public string Status { get; set; } = string.Empty;
     }
+
+    public record SimpleCreateOrderDto(int UserId, decimal TotalAmount);
 }
