@@ -59,9 +59,14 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// Configurar Entity Framework
+// Configurar Entity Framework sin dccker
+//builder.Services.AddDbContext<UserDbContext>(options =>
+//    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddDbContext<UserDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+    options.UseSqlServer(connectionString);
+});
 
 // Registrar servicios
 builder.Services.AddScoped<IUserService, UserECService>();
@@ -82,18 +87,24 @@ builder.Services.AddCors(options =>
     });
 });
 
+
 builder.Services.AddMassTransit(x =>
 {
-    // Registrar el consumer
+    // Configurar consumidores aquí
     x.AddConsumer<ProductCreatedConsumer>();
     x.AddConsumer<TestMessageConsumer>();
 
     x.UsingRabbitMq((context, cfg) =>
     {
-        cfg.Host("localhost", "/", h =>
+        // Leer configuración de RabbitMQ
+        var rabbitHost = builder.Configuration["RabbitMQ:Host"] ?? "localhost";
+        var rabbitUser = builder.Configuration["RabbitMQ:Username"] ?? "admin";
+        var rabbitPass = builder.Configuration["RabbitMQ:Password"] ?? "admin123";
+
+        cfg.Host(rabbitHost, "/", h =>
         {
-            h.Username("admin");
-            h.Password("admin123");
+            h.Username(rabbitUser);
+            h.Password(rabbitPass);
         });
 
         // Configurar el consumer
@@ -106,8 +117,38 @@ builder.Services.AddMassTransit(x =>
         {
             e.ConfigureConsumer<TestMessageConsumer>(context);
         });
+        //cfg.ConfigureEndpoints(context);
     });
 });
+
+
+//sin docker
+//builder.Services.AddMassTransit(x =>
+//{
+//    // Registrar el consumer
+//    x.AddConsumer<ProductCreatedConsumer>();
+//    x.AddConsumer<TestMessageConsumer>();
+
+//    x.UsingRabbitMq((context, cfg) =>
+//    {
+//        cfg.Host("localhost", "/", h =>
+//        {
+//            h.Username("admin");
+//            h.Password("admin123");
+//        });
+
+//        // Configurar el consumer
+//        cfg.ReceiveEndpoint("user-service-queue", e =>
+//        {
+//            e.ConfigureConsumer<ProductCreatedConsumer>(context);
+//        });
+
+//        cfg.ReceiveEndpoint("test-queue", e =>
+//        {
+//            e.ConfigureConsumer<TestMessageConsumer>(context);
+//        });
+//    });
+//});
 
 var app = builder.Build();
 

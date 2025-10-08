@@ -26,9 +26,15 @@ builder.Services.AddSwaggerGen(c =>
     c.SwaggerDoc("v1", new() { Title = "Order Service API", Version = "v1" });
 });
 
-// Configurar Entity Framework
+// Configurar Entity Framework sin docker
+//builder.Services.AddDbContext<OrderDbContext>(options =>
+//    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
 builder.Services.AddDbContext<OrderDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+    options.UseSqlServer(connectionString);
+});
 
 // Configurar HttpClients para comunicación con otros servicios
 var serviceUrls = builder.Configuration.GetSection("ServiceUrls").Get<ServiceUrls>() ?? new ServiceUrls();
@@ -37,25 +43,55 @@ builder.Services.AddSingleton(serviceUrls);
 builder.Services.AddResilientHttpClient("CatalogService", serviceUrls.CatalogService);
 builder.Services.AddResilientHttpClient("UserService", serviceUrls.UserService);
 
-// Configurar MassTransit con RabbitMQ
+
 builder.Services.AddMassTransit(x =>
 {
+    // Configurar consumidores aquí
     x.AddConsumer<StockReservedConsumer>();
     x.AddConsumer<PaymentProcessedConsumer>();
+    x.AddConsumer<UserCreatedConsumer>();
 
     x.UsingRabbitMq((context, cfg) =>
     {
-        var rabbitSettings = builder.Configuration.GetSection("RabbitMQ").Get<RabbitMQSettings>() ?? new RabbitMQSettings();
+        // Leer configuración de RabbitMQ
+        var rabbitHost = builder.Configuration["RabbitMQ:Host"] ?? "localhost";
+        var rabbitUser = builder.Configuration["RabbitMQ:Username"] ?? "admin";
+        var rabbitPass = builder.Configuration["RabbitMQ:Password"] ?? "admin123";
 
-        cfg.Host(rabbitSettings.Host, rabbitSettings.VirtualHost, h =>
+        cfg.Host(rabbitHost, "/", h =>
         {
-            h.Username(rabbitSettings.Username);
-            h.Password(rabbitSettings.Password);
+            h.Username(rabbitUser);
+            h.Password(rabbitPass);
         });
 
-        cfg.ConfigureEndpoints(context);
+        cfg.ReceiveEndpoint("order-service-queue", e =>
+        {
+            e.ConfigureConsumer<UserCreatedConsumer>(context);
+        });
+
+        //cfg.ConfigureEndpoints(context);
     });
 });
+
+// Configurar MassTransit con RabbitMQ sin docker
+//builder.Services.AddMassTransit(x =>
+//{
+//    x.AddConsumer<StockReservedConsumer>();
+//    x.AddConsumer<PaymentProcessedConsumer>();
+
+//    x.UsingRabbitMq((context, cfg) =>
+//    {
+//        var rabbitSettings = builder.Configuration.GetSection("RabbitMQ").Get<RabbitMQSettings>() ?? new RabbitMQSettings();
+
+//        cfg.Host(rabbitSettings.Host, rabbitSettings.VirtualHost, h =>
+//        {
+//            h.Username(rabbitSettings.Username);
+//            h.Password(rabbitSettings.Password);
+//        });
+
+//        cfg.ConfigureEndpoints(context);
+//    });
+//});
 
 // Registrar servicios
 builder.Services.AddScoped<IOrderService, OrderECService>();
@@ -85,24 +121,24 @@ client.Timeout = TimeSpan.FromSeconds(30);
 
 
 // Configurar RabbitMQ
-builder.Services.AddMassTransit(x =>
-{
-    x.AddConsumer<UserCreatedConsumer>();
+//builder.Services.AddMassTransit(x =>
+//{
+//    x.AddConsumer<UserCreatedConsumer>();
 
-    x.UsingRabbitMq((context, cfg) =>
-    {
-        cfg.Host("localhost", "/", h =>
-        {
-            h.Username("admin");
-            h.Password("admin123");
-        });
+//    x.UsingRabbitMq((context, cfg) =>
+//    {
+//        cfg.Host("localhost", "/", h =>
+//        {
+//            h.Username("admin");
+//            h.Password("admin123");
+//        });
 
-        cfg.ReceiveEndpoint("order-service-queue", e =>
-        {
-            e.ConfigureConsumer<UserCreatedConsumer>(context);
-        });
-    });
-});
+//        cfg.ReceiveEndpoint("order-service-queue", e =>
+//        {
+//            e.ConfigureConsumer<UserCreatedConsumer>(context);
+//        });
+//    });
+//});
 
 var app = builder.Build();
 
