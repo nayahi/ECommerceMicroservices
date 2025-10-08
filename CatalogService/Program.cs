@@ -47,9 +47,16 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// Configurar Entity Framework con SQL Server
-builder.Services.AddDbContext<CatalogDbContext>(options =>
+// Configurar Entity Framework con SQL Server sin Docker
+/*builder.Services.AddDbContext<CatalogDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+*/
+
+builder.Services.AddDbContext<CatalogDbContext>(options =>
+{
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+    options.UseSqlServer(connectionString);
+});
 
 // Registrar servicios
 builder.Services.AddScoped<IProductService, ProductService>();
@@ -73,8 +80,29 @@ builder.Services.AddCors(options =>
     });
 });
 
-// NUEVO: Configurar RabbitMQ con MassTransit
 builder.Services.AddMassTransit(x =>
+{
+    // Configurar consumidores aquí
+
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        // Leer configuración de RabbitMQ
+        var rabbitHost = builder.Configuration["RabbitMQ:Host"] ?? "localhost";
+        var rabbitUser = builder.Configuration["RabbitMQ:Username"] ?? "admin";
+        var rabbitPass = builder.Configuration["RabbitMQ:Password"] ?? "admin123";
+
+        cfg.Host(rabbitHost, "/", h =>
+        {
+            h.Username(rabbitUser);
+            h.Password(rabbitPass);
+        });
+
+        cfg.ConfigureEndpoints(context);
+    });
+});
+
+// NUEVO: Configurar RabbitMQ con MassTransit sin Docker
+/*builder.Services.AddMassTransit(x =>
 {
     x.UsingRabbitMq((context, cfg) =>
     {
@@ -88,6 +116,7 @@ builder.Services.AddMassTransit(x =>
         cfg.ConfigureEndpoints(context);
     });
 });
+*/
 
 var app = builder.Build();
 

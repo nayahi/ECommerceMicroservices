@@ -32,6 +32,13 @@ services:
     networks:
       - microservices-network
     restart: unless-stopped
+  # ⚠️ HEALTHCHECK SIMPLIFICADO - SIN SQLCMD
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/1433' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   # RabbitMQ con Management UI
   #rabbitmq:
@@ -60,6 +67,96 @@ services:
     networks:
       - microservices-network
     restart: unless-stopped
+    
+  # ====================================
+  # MICROSERVICIOS
+  # ====================================
+
+  # Catalog Service
+  catalog-service:
+    build:
+      context: ..                    # ← Contexto en la raíz (nivel de la solución)
+      dockerfile: CatalogService/Dockerfile  # ← Ruta al Dockerfile desde la raíz
+    container_name: catalog-service
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      # ⚠️ IMPORTANTE: Dentro de Docker, usa 'sqlserver' no 'localhost'
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=CatalogDB;User Id=sa;Password=Password123!;TrustServerCertificate=True;
+      # ⚠️ IMPORTANTE: Dentro de Docker, usa 'rabbitmq' no 'localhost'
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=admin
+      - RabbitMQ__Password=admin123
+    ports:
+      - "5001:80"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    restart: unless-stopped
+    volumes:
+      # Mapear carpeta de logs (opcional)
+      - ./logs/catalog:/app/logs
+      
+# =============================================
+  # USER SERVICE
+  # =============================================
+  user-service:
+    build:
+      context: ..
+      dockerfile: UserService/Dockerfile
+    container_name: user-service
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=UserDB;User Id=sa;Password=Password123!;TrustServerCertificate=True;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=admin
+      - RabbitMQ__Password=admin123
+    ports:
+      - "5002:80"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    restart: unless-stopped
+
+  # =============================================
+  # ORDER SERVICE
+  # =============================================
+  order-service:
+    build:
+      context: ..
+      dockerfile: OrderService/Dockerfile
+    container_name: order-service
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=OrderDB;User Id=sa;Password=Password123!;TrustServerCertificate=True;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=admin
+      - RabbitMQ__Password=admin123
+      - ServiceUrls__UserService=http://user-service
+      - ServiceUrls__CatalogService=http://catalog-service
+      - Redis__Configuration=redis:6379
+    ports:
+      - "5003:80"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      #redis:
+       # condition: service_healthy
+    networks:
+      - microservices-network
+    restart: unless-stopped      
 
 volumes:
   sqlserver-data:
